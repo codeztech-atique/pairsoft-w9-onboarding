@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "w9-onboarding"
+version = "0.1.0"
+description = "W-9 extraction and supplier onboarding prototype for PairSoft"
+requires-python = ">=3.11"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Atique Ahmed" }]
+dependencies = [
+  "pydantic>=2.7,<3",
+  "pdfplumber>=0.11",
+  "pypdf>=5.0",
+  "rapidfuzz>=3.9",
+  "python-dotenv>=1.0",
+  "reportlab>=4.2",
+  "pypdfium2>=4.30",
+  "pillow>=10.0",
+  "openai>=1.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+w9-onboard = "w9_onboarding.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
