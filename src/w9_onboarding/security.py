@@ -1,8 +1,10 @@
 """TIN handling, redaction, and tenant-scoped hashing.
 
-The prototype keeps matching in-process, so it still sees raw digits.
-What this module guarantees: raw TINs never appear in logs, evaluation
-summaries, or the default CLI payload.
+W-9s contain SSNs / EINs. Treat them like sensitive PII.
+
+The prototype still needs raw digits in-process for matching. What this
+module guarantees: raw TINs never appear in logs, evaluation summaries,
+or the default CLI payload (use --include-tin only for a trusted write path).
 """
 
 from __future__ import annotations
@@ -15,18 +17,21 @@ from typing import Optional
 from w9_onboarding.models import TinType
 
 _NON_DIGIT = re.compile(r"\D+")
+# Catch common SSN / EIN shapes if someone accidentally logs them.
 _LOG_TIN_PATTERN = re.compile(
     r"\b(\d{3}-\d{2}-\d{4}|\d{2}-\d{7}|\d{9})\b"
 )
 
 
 def normalize_tin(raw: Optional[str]) -> str:
+    """Strip punctuation so `12-3456789` and `123456789` compare equal."""
     if not raw:
         return ""
     return _NON_DIGIT.sub("", raw)
 
 
 def detect_tin_type(digits: str, hint: Optional[str] = None) -> TinType:
+    """Prefer an explicit hint (SSN vs EIN); otherwise leave UNKNOWN."""
     if hint:
         upper = hint.upper()
         if "SSN" in upper or "SOCIAL" in upper:
@@ -39,6 +44,7 @@ def detect_tin_type(digits: str, hint: Optional[str] = None) -> TinType:
 
 
 def format_tin(digits: str, tin_type: TinType) -> Optional[str]:
+    """Pretty-print for display: SSN xxx-xx-xxxx, EIN xx-xxxxxxx."""
     if len(digits) != 9:
         return digits or None
     if tin_type == TinType.SSN:
@@ -47,6 +53,7 @@ def format_tin(digits: str, tin_type: TinType) -> Optional[str]:
 
 
 def redact_tin(digits: str, tin_type: TinType) -> Optional[str]:
+    """Mask all but the last 4 digits for logs and default API output."""
     if not digits:
         return None
     last4 = digits[-4:] if len(digits) >= 4 else digits
@@ -64,12 +71,16 @@ def tin_last4(digits: str) -> Optional[str]:
 
 
 def hash_tin(digits: str, tenant_id: str, salt: str = "w9-onboarding-v1") -> str:
-    """Tenant-scoped hash so the same TIN is not a cross-tenant join key."""
+    """Tenant-scoped hash so the same TIN is not a cross-tenant join key.
+
+    Customer A's EIN must never become a feature that Customer B can match on.
+    """
     material = f"{salt}|{tenant_id}|{digits}".encode("utf-8")
     return hashlib.sha256(material).hexdigest()
 
 
 def looks_like_ssn_format(digits: str) -> bool:
+    """Basic SSN area/group/serial sanity checks (not IRS verification)."""
     if len(digits) != 9:
         return False
     area, group, serial = digits[0:3], digits[3:5], digits[5:9]
@@ -86,6 +97,8 @@ def looks_like_ein_format(digits: str) -> bool:
 
 
 class RedactingFilter(logging.Filter):
+    """Scrub SSN/EIN-shaped tokens from every log record."""
+
     def filter(self, record: logging.LogRecord) -> bool:
         record.msg = _LOG_TIN_PATTERN.sub("[REDACTED_TIN]", str(record.msg))
         if record.args:
@@ -100,6 +113,7 @@ class RedactingFilter(logging.Filter):
 
 
 def configure_logging(level: int = logging.INFO) -> None:
+    """Set up root logging with TIN redaction attached to every handler."""
     logging.basicConfig(
         level=level,
         format="%(asctime)s %(levelname)s %(name)s %(message)s",

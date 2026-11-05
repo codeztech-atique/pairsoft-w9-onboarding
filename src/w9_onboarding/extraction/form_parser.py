@@ -42,13 +42,22 @@ CLASS_PATTERNS = [
 
 
 def parse_w9_text(text: str) -> tuple[ExtractedFields, str, Optional[str], str]:
-    """Return fields, detected form, revision, and extractor path label."""
+    """Parse recovered W-9 text into ExtractedFields.
+
+    Returns: (fields, detected_form, revision, extractor_path_label).
+
+    Strategy: look for IRS line labels (Line 1 name, Line 2 DBA, etc.)
+    and pull the value on the same / next line. This is a local stand-in
+    for a custom Document Intelligence model.
+    """
     detected = _detect_form(text)
     revision = _detect_revision(text)
     fields = ExtractedFields()
+    # Wrong form: stop early — do not invent US supplier fields from a W-8.
     if detected != "W-9":
         return fields, detected, revision, "heuristic"
 
+    # Line 1 — legal name as shown on the income tax return.
     fields.legal_name = _field(
         _first_labeled(
             text,
@@ -61,6 +70,7 @@ def parse_w9_text(text: str) -> tuple[ExtractedFields, str, Optional[str], str]:
         ),
         0.9,
     )
+    # Line 2 — business / DBA name (optional).
     fields.dba_name = _field(
         _first_labeled(
             text,

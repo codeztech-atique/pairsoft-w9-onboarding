@@ -1,4 +1,13 @@
-"""Command-line entry point. A REST server is intentionally out of scope."""
+"""Command-line entry point.
+
+A REST server / UI is intentionally out of scope for this case study.
+The CLI prints the same JSON object a REST handler would return.
+
+Commands:
+  process            Run the pipeline on one W-9 PDF or image
+  evaluate           Score the pipeline against the golden sample set
+  generate-samples   Rebuild demo PDFs, supplier master, and labels
+"""
 
 from __future__ import annotations
 
@@ -14,6 +23,7 @@ from w9_onboarding.security import configure_logging
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Install a log filter so raw TINs never leak into console logs.
     configure_logging()
     parser = argparse.ArgumentParser(
         prog="w9-onboard",
@@ -21,6 +31,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
+    # --- process one document ---
     process_cmd = sub.add_parser("process", help="Run the pipeline on one document")
     process_cmd.add_argument("document", help="Path to a W-9 PDF or image")
     process_cmd.add_argument(
@@ -30,9 +41,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     process_cmd.add_argument("--tenant", default="demo-tenant")
     process_cmd.add_argument("--out", help="Write JSON to this path")
+    # Raw TIN is withheld by default; pass this only for a trusted write path.
     process_cmd.add_argument("--include-tin", action="store_true")
     process_cmd.add_argument("--use-llm", action="store_true", help="Enable optional OpenAI refinement")
 
+    # --- score the labeled set ---
     eval_cmd = sub.add_parser("evaluate", help="Score the pipeline against golden samples")
     eval_cmd.add_argument("--data-dir", default=str(DATA_DIR))
     eval_cmd.add_argument("--use-llm", action="store_true")
@@ -41,6 +54,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("generate-samples", help="Regenerate PDFs, master file, and labels")
 
     args = parser.parse_args(argv)
+
     if args.command == "generate-samples":
         paths = generate_fixtures(ROOT)
         print(json.dumps({key: str(value) for key, value in paths.items()}, indent=2))
@@ -55,6 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             out_path.parent.mkdir(parents=True, exist_ok=True)
             out_path.write_text(text, encoding="utf-8")
         metrics = report["metrics"]
+        # Summary line on stderr so JSON on stdout stays machine-parseable.
         print(
             f"\n{metrics['n_cases']} cases  "
             f"decision={metrics['decision_accuracy']:.0%}  "
@@ -64,6 +79,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if metrics["decision_accuracy"] == 1.0 else 1
 
+    # Default path: process one document and print the OnboardingResponse.
     result = process_document(
         args.document,
         args.master,

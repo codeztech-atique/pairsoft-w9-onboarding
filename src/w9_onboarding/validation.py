@@ -1,7 +1,10 @@
 """Field-level validation and quality flags.
 
-These flags are part of the API contract. Downstream should not
-re-implement TIN format or signature presence checks.
+Extraction says "I saw this." Validation says "this is allowed to become
+a supplier." Flags are stable machine-readable codes so downstream can
+route on them (e.g. open a review task on MISSING_SIGNATURE).
+
+Downstream should not re-implement TIN format or signature checks.
 """
 
 from __future__ import annotations
@@ -16,6 +19,7 @@ from w9_onboarding.models import (
 from w9_onboarding.normalize import normalize_classification
 from w9_onboarding.security import looks_like_ein_format, looks_like_ssn_format, normalize_tin
 
+# Valid USPS state / DC abbreviations for a quick address sanity check.
 US_STATES = {
     "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID",
     "IL", "IN", "IA", "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS",
@@ -32,8 +36,14 @@ def validate(
     quality_score: float,
     disagreements: list[str],
 ) -> ValidationResult:
+    """Build validation flags for one extracted W-9.
+
+    ERROR flags set `blocking=True` and prevent automatic create/update.
+    WARNING / INFO flags are advisory for reviewers and ops dashboards.
+    """
     flags: list[ValidationFlag] = []
 
+    # A W-8 (foreign) or unknown form must not create a US supplier record.
     if detected_form != "W-9":
         flags.append(
             ValidationFlag(
@@ -43,6 +53,7 @@ def validate(
             )
         )
 
+    # Line 1 is required for IRS TIN Matching in production.
     if not fields.legal_name.filled():
         flags.append(
             ValidationFlag(
@@ -53,6 +64,7 @@ def validate(
             )
         )
 
+    # Tax identity: missing or bad format blocks auto onboarding.
     tin_digits = normalize_tin(fields.tin.value)
     if not tin_digits:
         flags.append(
@@ -66,6 +78,7 @@ def validate(
     else:
         flags.extend(_tin_flags(fields, tin_digits))
 
+    # Address issues are warnings — pay-to risk, but not always blocking alone.
     if not fields.address.street.filled() or not fields.address.city.filled():
         flags.append(
             ValidationFlag(
@@ -96,6 +109,7 @@ def validate(
             )
         )
 
+    # An unsigned W-9 is not a valid tax certification.
     if fields.signature_present.value != "true":
         flags.append(
             ValidationFlag(
@@ -115,6 +129,7 @@ def validate(
             )
         )
 
+    # Older revisions are fine; note that Line 3b will be absent.
     if form_revision and ("2018" in form_revision or "2017" in form_revision):
         flags.append(
             ValidationFlag(
@@ -134,6 +149,7 @@ def validate(
             )
         )
 
+    # Heuristic vs LLM fought on a field — raise review awareness.
     for field_name in disagreements:
         flags.append(
             ValidationFlag(
@@ -145,12 +161,12 @@ def validate(
         )
 
     blocking = any(f.severity == FlagSeverity.ERROR for f in flags)
-    # Wrong form / missing name+TIN are the only hard blockers for auto-create.
     passed = not blocking
     return ValidationResult(passed=passed, blocking=blocking, flags=flags)
 
 
 def _tin_flags(fields: ExtractedFields, digits: str) -> list[ValidationFlag]:
+    """Local TIN format checks only — IRS TIN Matching is a production adapter."""
     flags: list[ValidationFlag] = []
     tin_type = fields.tin.tin_type
     if tin_type == TinType.SSN and not looks_like_ssn_format(digits):
@@ -190,6 +206,7 @@ def _tin_flags(fields: ExtractedFields, digits: str) -> list[ValidationFlag]:
             )
         )
 
+    # Soft check: a C-Corp with an SSN is usually a data-entry mistake.
     classification = normalize_classification(fields.tax_classification.value)
     entity_classes = {
         "C_CORPORATION",
@@ -211,6 +228,7 @@ def _tin_flags(fields: ExtractedFields, digits: str) -> list[ValidationFlag]:
 
 
 def _valid_zip(value: str) -> bool:
+    """Accept 5-digit or ZIP+4 forms."""
     compact = value.replace(" ", "")
     return bool(
         __import__("re").fullmatch(r"\d{5}(-\d{4})?", compact)

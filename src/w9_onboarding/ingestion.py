@@ -1,8 +1,10 @@
 """Ingest a local W-9 file and recover page text.
 
-Production would run virus scan, type sniffing, and image quality
-scoring here. The prototype does honest format detection and text
-recovery so the rest of the pipeline has something to parse.
+First stage of the pipeline: open the file, detect type, pull text.
+
+Production would also run virus scan, deeper type sniffing, and image
+quality scoring here. The prototype does honest format detection and
+text recovery so the rest of the pipeline has something to parse.
 """
 
 from __future__ import annotations
@@ -24,6 +26,12 @@ PDF_SUFFIXES = {".pdf"}
 
 @dataclass
 class IngestedDocument:
+    """Raw ingest result passed to extraction.
+
+    `quality_score` is used later when computing overall confidence.
+    `used_ocr` is true when we had to fall back from a missing PDF text layer.
+    """
+
     path: Path
     media_type: str
     page_count: int
@@ -34,6 +42,7 @@ class IngestedDocument:
 
 
 def ingest(path: str | Path) -> IngestedDocument:
+    """Open a PDF or image and return recovered text + a quality score."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(path)
@@ -46,10 +55,12 @@ def ingest(path: str | Path) -> IngestedDocument:
 
 
 def _ingest_pdf(path: Path) -> IngestedDocument:
+    """Prefer the digital text layer; OCR only if the PDF is a scan."""
     issues: list[str] = []
     text = _pdfplumber_text(path)
     page_count = _page_count(path)
     if not text.strip():
+        # Scanned PDF: try OCR if Tesseract / pypdfium2 are available.
         ocr_text, ocr_ok = _ocr_pdf(path)
         if ocr_ok and ocr_text.strip():
             text = ocr_text
@@ -63,6 +74,7 @@ def _ingest_pdf(path: Path) -> IngestedDocument:
                 quality_issues=issues,
                 used_ocr=True,
             )
+        # Do not invent text — mark low quality and let matching go to review.
         issues.append("no_extractable_text")
         return IngestedDocument(
             path=path,

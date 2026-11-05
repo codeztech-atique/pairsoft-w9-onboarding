@@ -1,4 +1,9 @@
-"""Load a tenant supplier master from CSV or JSON."""
+"""Load a tenant supplier master from CSV or JSON.
+
+In production this would be a tenant-scoped search API. The case study
+allows a local file stand-in so matching can be demonstrated offline.
+Each customer has its own master — never search across tenants.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +16,7 @@ from w9_onboarding.security import detect_tin_type, normalize_tin
 
 
 def load_supplier_master(path: str | Path) -> list[SupplierRecord]:
+    """Load all supplier rows from a CSV or JSON file."""
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"Supplier master not found: {path}")
@@ -36,6 +42,7 @@ def _from_json(path: Path) -> list[SupplierRecord]:
 
 
 def _row_to_record(row: dict) -> SupplierRecord:
+    """Map one CSV/JSON row onto the SupplierRecord model (flexible column names)."""
     tin_raw = row.get("tin") or row.get("TIN") or ""
     digits = normalize_tin(tin_raw)
     hinted = row.get("tin_type") or row.get("tinType") or ""

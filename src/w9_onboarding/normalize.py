@@ -1,4 +1,9 @@
-"""Shared string normalization for names, addresses, and classifications."""
+"""Shared string normalization for names, addresses, and classifications.
+
+Matching must treat `ACME CORP.` and `ACME CORPORATION` as the same entity,
+and `100 Market Street` as the same street as `100 MARKET ST`. These helpers
+fold text for comparison only — original values stay in the API response.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +13,7 @@ from typing import Optional
 _PUNCT = re.compile(r"[.,'/&#()]+")
 _WS = re.compile(r"\s+")
 
+# Legal suffixes dropped during name folding so CORP ≈ CORPORATION ≈ INC.
 _LEGAL_SUFFIXES = (
     r"\bINCORPORATED\b",
     r"\bCORPORATION\b",
@@ -35,7 +41,10 @@ def collapse_ws(value: Optional[str]) -> str:
 
 
 def normalize_name(value: Optional[str]) -> str:
-    """Aggressive legal-name fold used for matching, not for display."""
+    """Aggressive legal-name fold used for matching, not for display.
+
+    Example: "The Acme Corp." → "ACME"
+    """
     text = collapse_ws(value).upper()
     if not text:
         return ""
@@ -46,10 +55,12 @@ def normalize_name(value: Optional[str]) -> str:
 
 
 def names_equivalent(a: Optional[str], b: Optional[str]) -> bool:
+    """True when both names fold to the same non-empty string."""
     return normalize_name(a) == normalize_name(b) and bool(normalize_name(a))
 
 
 def normalize_state(value: Optional[str]) -> str:
+    """Map common full state names to 2-letter codes; pass codes through."""
     text = collapse_ws(value).upper()
     aliases = {
         "CALIFORNIA": "CA",
@@ -64,6 +75,7 @@ def normalize_state(value: Optional[str]) -> str:
 
 
 def normalize_zip(value: Optional[str]) -> str:
+    """Keep the first 5 ZIP digits for equality checks."""
     if not value:
         return ""
     digits = re.sub(r"\D", "", value)
@@ -71,6 +83,7 @@ def normalize_zip(value: Optional[str]) -> str:
 
 
 def normalize_street(value: Optional[str]) -> str:
+    """Fold street-type words (STREET→ST, AVENUE→AVE) for fuzzy address match."""
     text = collapse_ws(value).upper()
     replacements = {
         r"\bSTREET\b": "ST",
@@ -114,6 +127,7 @@ CLASSIFICATION_ALIASES = {
 
 
 def normalize_classification(value: Optional[str]) -> str:
+    """Map free-text / checkbox labels onto the TaxClassification enum values."""
     if not value:
         return "UNKNOWN"
     key = collapse_ws(value).upper().replace("_", " ").replace("-", " ")

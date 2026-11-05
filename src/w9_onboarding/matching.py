@@ -1,5 +1,8 @@
 """Match extracted W-9 data to a tenant supplier master.
 
+This is the decision engine. Models extract fields; *this module* decides
+CREATE_NEW / UPDATE_EXISTING / HUMAN_REVIEW.
+
 Decision rules (opinionated):
 
 1. TIN is the strongest key and is never sufficient alone.
@@ -37,15 +40,18 @@ from w9_onboarding.normalize import (
 )
 from w9_onboarding.security import normalize_tin, redact_tin
 
+# Similarity thresholds used by the match policy below.
 NAME_STRONG = 0.92
 NAME_MEDIUM = 0.80
 ADDRESS_STRONG = 0.90
-AMBIGUITY_DELTA = 0.08
-REVIEW_CONFIDENCE_FLOOR = 0.62
+AMBIGUITY_DELTA = 0.08  # two candidates this close → ask a human
+REVIEW_CONFIDENCE_FLOOR = 0.62  # below this, do not auto-act
 
 
 @dataclass
 class Scored:
+    """One master row scored against the extracted W-9 identity."""
+
     record: SupplierRecord
     tin_match: bool
     name_score: float
@@ -60,6 +66,9 @@ def match_supplier(
     overall_confidence: float,
     detected_form: str,
 ) -> MatchResult:
+    """Return create / update / review for this W-9 against the tenant master."""
+
+    # Gate 1: only onboard US suppliers from a W-9.
     if detected_form != "W-9":
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -69,6 +78,7 @@ def match_supplier(
             [],
         )
 
+    # Gate 2: if we barely read the form, stop and ask a person.
     if overall_confidence < REVIEW_CONFIDENCE_FLOOR:
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -78,6 +88,7 @@ def match_supplier(
             [],
         )
 
+    # Gate 3: missing identity fields cannot become an auto create/update.
     blocking_codes = {flag.code for flag in validation.flags if flag.severity.value == "error"}
     hard_blockers = blocking_codes & {"MISSING_LEGAL_NAME", "MISSING_TIN", "TIN_FORMAT_INVALID"}
     if hard_blockers:
@@ -91,14 +102,17 @@ def match_supplier(
             [],
         )
 
+    # Score every master row; TIN hits sort first.
     scored = [_score(fields, record) for record in master]
     scored.sort(key=lambda item: (item.tin_match, item.composite, item.name_score), reverse=True)
     candidates = [_to_candidate(item) for item in scored[:5] if item.composite >= 0.35 or item.tin_match]
 
+    # Path A: exact TIN found in this tenant's master.
     tin_hits = [item for item in scored if item.tin_match]
     if tin_hits:
         return _from_tin_match(fields, tin_hits, candidates)
 
+    # Path B: no TIN hit — decide create vs possible-duplicate review.
     if not candidates:
         if "MISSING_SIGNATURE" in blocking_codes:
             return _decision(
@@ -118,6 +132,8 @@ def match_supplier(
 
     top = scored[0]
     second = scored[1] if len(scored) > 1 else None
+
+    # Same name + address, different TIN → classic duplicate risk.
     if (
         top.name_score >= NAME_STRONG
         and top.address_score >= ADDRESS_STRONG
@@ -134,6 +150,7 @@ def match_supplier(
             matched=top.record.supplier_id,
         )
 
+    # Two near-tied candidates → reviewer picks.
     if top.name_score >= NAME_MEDIUM and second and abs(top.composite - second.composite) < AMBIGUITY_DELTA:
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -146,6 +163,7 @@ def match_supplier(
             candidates,
         )
 
+    # Name-only similarity without TIN is too weak for auto-action.
     if top.name_score >= NAME_MEDIUM:
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -182,6 +200,13 @@ def _from_tin_match(
     tin_hits: list[Scored],
     candidates: list[MatchCandidate],
 ) -> MatchResult:
+    """Handle the case where the extracted TIN already exists on the master.
+
+    TIN match is necessary for UPDATE_EXISTING, but never sufficient alone.
+    Name must agree, and material changes (address, classification, DBA)
+    go to HUMAN_REVIEW instead of a silent update.
+    """
+    # Same TIN on multiple master rows is a data-quality problem, not auto-merge.
     if len(tin_hits) > 1:
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -204,6 +229,7 @@ def _from_tin_match(
         >= 88
     )
 
+    # Same TIN, different legal name → fraud signal or unreported rename.
     if not name_ok:
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -218,6 +244,7 @@ def _from_tin_match(
             changes=material,
         )
 
+    # Same identity, but pay-to / tax posture changed → review before writing.
     if material:
         return _decision(
             MatchDecision.HUMAN_REVIEW,
@@ -243,6 +270,7 @@ def _from_tin_match(
             changes=["dba_name"],
         )
 
+    # Boring happy path: same TIN, same name, nothing material changed.
     return _decision(
         MatchDecision.UPDATE_EXISTING,
         0.93,
@@ -257,10 +285,12 @@ def _from_tin_match(
 
 
 def _score(fields: ExtractedFields, record: SupplierRecord) -> Scored:
+    """Compare one extracted W-9 to one master row."""
     extracted_tin = normalize_tin(fields.tin.value)
     record_tin = normalize_tin(record.tin)
     tin_match = bool(extracted_tin and record_tin and extracted_tin == record_tin)
 
+    # Compare legal name and DBA both ways (either side may carry the trade name).
     extracted_names = [normalize_name(fields.legal_name.value)]
     if fields.dba_name.filled():
         extracted_names.append(normalize_name(fields.dba_name.value))
@@ -291,6 +321,7 @@ def _score(fields: ExtractedFields, record: SupplierRecord) -> Scored:
 
 
 def _address_score(fields: ExtractedFields, record: SupplierRecord) -> float:
+    """Street-weighted address similarity (street 50%, city/state/ZIP the rest)."""
     street = 0.0
     if fields.address.street.value and record.street:
         street = fuzz.token_sort_ratio(
@@ -309,6 +340,11 @@ def _address_score(fields: ExtractedFields, record: SupplierRecord) -> float:
 
 
 def _material_changes(fields: ExtractedFields, record: SupplierRecord) -> list[str]:
+    """Fields that must not silently update pay-to or tax posture.
+
+    Address / ZIP changes can redirect payments. Classification changes
+    affect 1099 posture. Both require a human before writing the master.
+    """
     changes: list[str] = []
     extracted_zip = normalize_zip(fields.address.zip.value)
     record_zip = normalize_zip(record.zip)
@@ -334,6 +370,7 @@ def _eq(a: str | None, b: str | None) -> bool:
 
 
 def _to_candidate(item: Scored) -> MatchCandidate:
+    """Public candidate row: TIN is always redacted in the response."""
     digits = normalize_tin(item.record.tin)
     return MatchCandidate(
         supplier_id=item.record.supplier_id,
@@ -356,6 +393,7 @@ def _decision(
     matched: str | None = None,
     changes: list[str] | None = None,
 ) -> MatchResult:
+    """Build the MatchResult block of the API response."""
     return MatchResult(
         decision=decision,
         confidence=round(confidence, 3),

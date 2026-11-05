@@ -5,7 +5,11 @@
 
 AI-powered service that ingests an IRS Form W-9, extracts the supplier tax identity with per-field confidence, validates it, and returns a structured **create / update / human review** decision against a tenant supplier master.
 
-This is the working prototype for the PairSoft Central AI Services case study. The design behind the code is in [DESIGN.md](DESIGN.md). This README is what to run, what the API returns, and what to look at first.
+This is the working prototype for the PairSoft Central AI Services case study.
+
+- **Start here (simple language):** [docs/README.md](docs/README.md) — problem, what we built, what each file does
+- **Full design:** [DESIGN.md](DESIGN.md) — architecture, match policy, security, cost
+- **This README:** how to run it, what the API returns, and what to look at first
 
 **Repository:** [codeztech-atique/pairsoft-w9-onboarding](https://github.com/codeztech-atique/pairsoft-w9-onboarding)
 
@@ -34,11 +38,12 @@ It does **not** write the supplier master. Another PairSoft service consumes the
 
 If you have 15 minutes before a walkthrough, go in this order:
 
-1. [DESIGN.md](DESIGN.md) — architecture, match policy, security, cost model.
-2. [`src/w9_onboarding/models.py`](src/w9_onboarding/models.py) — the versioned API contract.
-3. [`src/w9_onboarding/matching.py`](src/w9_onboarding/matching.py) — create vs update vs review.
-4. [`data/samples/`](data/samples/) — the ten labeled documents used in evaluation.
-5. Run `w9-onboard process` and `w9-onboard evaluate` below.
+1. [docs/README.md](docs/README.md) — plain-language overview of the problem and files.
+2. [DESIGN.md](DESIGN.md) — architecture, match policy, security, cost model.
+3. [`src/w9_onboarding/models.py`](src/w9_onboarding/models.py) — the versioned API contract.
+4. [`src/w9_onboarding/matching.py`](src/w9_onboarding/matching.py) — create vs update vs review.
+5. [`data/samples/`](data/samples/) — the ten labeled documents used in evaluation.
+6. Run `w9-onboard process` and `w9-onboard evaluate` below.
 
 ---
 

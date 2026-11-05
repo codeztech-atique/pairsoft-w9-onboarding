@@ -40,6 +40,8 @@ class TinType(str, Enum):
 
 
 class MatchDecision(str, Enum):
+    """The only three outcomes downstream products should branch on."""
+
     CREATE_NEW = "CREATE_NEW"
     UPDATE_EXISTING = "UPDATE_EXISTING"
     HUMAN_REVIEW = "HUMAN_REVIEW"
@@ -103,6 +105,8 @@ class AddressFields(BaseModel):
 
 
 class ExtractedFields(BaseModel):
+    """All W-9 fields we extract, each with its own confidence + source."""
+
     legal_name: FieldValue = Field(default_factory=FieldValue)
     dba_name: FieldValue = Field(default_factory=FieldValue)
     tax_classification: FieldValue = Field(default_factory=FieldValue)
@@ -153,6 +157,12 @@ class MatchCandidate(BaseModel):
 
 
 class MatchResult(BaseModel):
+    """Create / update / review decision plus a stable reason_code.
+
+    `reason_code` is for machines (routing, metrics).
+    `reasoning` is for humans (reviewer UI, audit trail).
+    """
+
     decision: MatchDecision
     confidence: float = Field(ge=0.0, le=1.0, default=0.0)
     reason_code: str
@@ -184,6 +194,7 @@ class OnboardingResponse(BaseModel):
     audit: AuditInfo
 
     def to_public_dict(self, include_tin: bool = False) -> dict[str, Any]:
+        """Serialize for CLI / API. Raw TIN is stripped unless explicitly requested."""
         payload = self.model_dump(mode="json")
         if not include_tin:
             tin = payload["extraction"]["tin"]

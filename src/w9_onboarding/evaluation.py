@@ -1,7 +1,11 @@
 """Lightweight evaluation against golden labels.
 
-This is the quality signal I would grow into a regression suite:
-field-level extraction accuracy plus decision-level matching accuracy.
+Scores two things that matter for the platform:
+  1. Field accuracy  — did we extract the right name / TIN / address?
+  2. Decision accuracy — did we pick create / update / review correctly?
+
+`data/golden/labels.json` is the source of truth for expected answers.
+This is the quality signal to grow into a regression suite.
 """
 
 from __future__ import annotations
@@ -21,6 +25,8 @@ from w9_onboarding.security import normalize_tin
 
 @dataclass
 class CaseResult:
+    """One labeled sample scored against the live pipeline output."""
+
     filename: str
     expected_decision: str
     actual_decision: str
@@ -38,6 +44,7 @@ def evaluate(
     use_llm: bool = False,
     regenerate: bool = True,
 ) -> dict:
+    """Run every golden sample and return a metrics report."""
     if regenerate or not (data_dir / "samples").exists():
         generate_fixtures(data_dir.parent if data_dir.name == "data" else data_dir)
         data_dir = data_dir if data_dir.name == "data" else data_dir / "data"
